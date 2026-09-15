@@ -1,0 +1,33 @@
+# Deployment for a VPS that already runs its own reverse proxy.
+#
+# Matches the existing pattern on the box: one directory under /home/ubuntu,
+# one compose file, one Caddy site block. Caddy runs with network_mode: host,
+# so binding to 127.0.0.1 is enough for it to reach us — and keeps the app off
+# the public interface entirely, where only the cloud firewall would guard it.
+#
+#   cd /home/ubuntu/doodly-squat
+#   cp deploy/behind-caddy/.env.example deploy/behind-caddy/.env
+#   $EDITOR deploy/behind-caddy/.env
+#   docker compose -f deploy/behind-caddy/docker-compose.yml up -d --build
+
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: doodly-squat
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - stash-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  stash-data:

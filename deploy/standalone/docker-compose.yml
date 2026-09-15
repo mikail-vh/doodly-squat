@@ -1,0 +1,49 @@
+# Standalone deployment: app + Caddy, for a VPS WITHOUT Coolify.
+# If you are using Coolify, ignore this file entirely — Coolify owns ports
+# 80/443 and terminates TLS itself. Use the Dockerfile build pack instead.
+#   docker compose -f deploy/standalone/docker-compose.yml up -d --build
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_URL: ${APP_URL:?set APP_URL in .env, e.g. https://squat.mvhuysie.com}
+      APP_NAME: ${APP_NAME:-Doodly Squat}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      STATS_INGEST_TOKEN: ${STATS_INGEST_TOKEN:-}
+    volumes:
+      - stash-data:/data
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env, e.g. squat.mvhuysie.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  stash-data:
+  caddy-data:
+  caddy-config:

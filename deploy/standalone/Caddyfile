@@ -1,0 +1,6 @@
+# Caddy fetches and renews the certificate for {$DOMAIN} on its own, and sets
+# the X-Forwarded-Proto/Host headers the app reads to build its redirect URIs.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:3000
+}

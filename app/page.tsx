@@ -1,69 +1,166 @@
-import Image from "next/image";
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { rememberRoom, useRecentRooms } from "@/lib/local";
 
 export default function Home() {
+  const router = useRouter();
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState<"create" | "join" | null>(null);
+  const [error, setError] = useState("");
+  const recent = useRecentRooms();
+
+  async function createStash(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy("create");
+    setError("");
+    try {
+      const res = await fetch("/api/rooms", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) throw new Error("create failed");
+      const { room } = await res.json();
+      rememberRoom(room);
+      router.push(`/room/${room.code}`);
+    } catch {
+      setError("Could not make that stash. Give it another go?");
+      setBusy(null);
+    }
+  }
+
+  async function joinStash(event: React.FormEvent) {
+    event.preventDefault();
+    const clean = code.trim().toUpperCase();
+    setError("");
+    if (clean.length < 4) {
+      setError("Codes are six characters long.");
+      return;
+    }
+    setBusy("join");
+    try {
+      const res = await fetch(`/api/rooms/${clean}`);
+      if (!res.ok) throw new Error("not found");
+      const { room } = await res.json();
+      rememberRoom(room);
+      router.push(`/room/${room.code}`);
+    } catch {
+      setError(`No stash goes by ${clean}.`);
+      setBusy(null);
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="mx-auto w-full max-w-3xl px-4 py-12 sm:px-6 lg:py-20">
+      <header className="text-center">
+        <span className="sticker press inline-block -rotate-3 rounded-2xl bg-panel px-4 py-2 font-display text-sm tracking-wide">
+          ✏️ for skribbl.io nights
+        </span>
+        <h1 className="mt-6 font-display text-5xl leading-tight sm:text-6xl">
+          Doodly{" "}
+          <span className="inline-block rotate-2 rounded-xl bg-brand px-3 text-brand-ink">
+            Squat
+          </span>
+        </h1>
+        <p className="mx-auto mt-5 max-w-lg text-lg text-muted">
+          Nobody here knows doodly squat about drawing. Hoard a pile of cursed
+          words with your friends, export it as one comma-separated line, and
+          paste it into skribbl.io.
+        </p>
+      </header>
+
+      <div className="mt-12 grid gap-6 sm:grid-cols-2">
+        <form
+          onSubmit={createStash}
+          className="sticker flex flex-col rounded-3xl bg-panel p-6"
+        >
+          <h2 className="font-display text-2xl">Start a stash</h2>
+          <p className="mt-1 text-sm text-muted">
+            Name it, share the link, add words together.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+          <input
+            className="field mt-5"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Thursday Night Chaos"
+            maxLength={40}
+            aria-label="Stash name"
+          />
+          <button
+            type="submit"
+            disabled={busy !== null}
+            className="sticker press mt-4 rounded-xl bg-brand px-5 py-3 font-display text-brand-ink disabled:opacity-60"
           >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            {busy === "create" ? "Making it…" : "Create stash →"}
+          </button>
+        </form>
+
+        <form
+          onSubmit={joinStash}
+          className="sticker flex flex-col rounded-3xl bg-panel p-6"
+        >
+          <h2 className="font-display text-2xl">Join a stash</h2>
+          <p className="mt-1 text-sm text-muted">
+            Someone sent you a six-character code.
+          </p>
+          <input
+            className="field mt-5 text-center font-display text-2xl tracking-[0.35em] uppercase"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            placeholder="ABC123"
+            maxLength={6}
+            autoCapitalize="characters"
+            autoComplete="off"
+            spellCheck={false}
+            aria-label="Stash code"
+          />
+          <button
+            type="submit"
+            disabled={busy !== null}
+            className="sticker press mt-4 rounded-xl bg-panel px-5 py-3 font-display disabled:opacity-60"
           >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+            {busy === "join" ? "Knocking…" : "Let me in"}
+          </button>
+        </form>
+      </div>
+
+      {error ? (
+        <p
+          role="alert"
+          className="sticker-sm pop-in mx-auto mt-6 w-fit rounded-xl bg-brand px-4 py-2 font-display text-sm text-brand-ink"
+        >
+          {error}
+        </p>
+      ) : null}
+
+      {recent.length > 0 ? (
+        <section className="mt-14">
+          <h2 className="font-display text-lg text-muted">Your stashes</h2>
+          <ul className="mt-3 flex flex-wrap gap-3">
+            {recent.map((room) => (
+              <li key={room.code}>
+                <Link
+                  href={`/room/${room.code}`}
+                  className="sticker-sm press-sm flex items-center gap-2 rounded-xl bg-panel px-4 py-2 transition"
+                >
+                  <span className="font-display">{room.name}</span>
+                  <span className="font-mono text-xs text-muted">
+                    {room.code}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      <footer className="mt-16 text-center text-sm text-muted">
+        No accounts, no sign-ups. Anyone with the link can edit the list.
+      </footer>
+    </main>
   );
 }

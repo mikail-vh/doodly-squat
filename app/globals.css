@@ -1,26 +1,169 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme inline {
+  --font-display: var(--font-display-family), system-ui, sans-serif;
+  --font-sans: var(--font-body-family), system-ui, sans-serif;
+
+  --color-paper: var(--paper);
+  --color-panel: var(--panel);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-edge: var(--edge);
+  --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
+  --color-mint: var(--mint);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+:root {
+  color-scheme: light;
+  --paper: #fdf4e3;
+  --panel: #fffdf8;
+  --ink: #241f2e;
+  --muted: #7b7189;
+  --edge: #241f2e;
+  --brand: #ff4f8b;
+  --brand-ink: #ffffff;
+  --mint: #10a37f;
+  --dot: rgba(36, 31, 46, 0.16);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #16131d;
+    --panel: #221d2c;
+    --ink: #f7f1e8;
+    --muted: #a79db6;
+    --edge: #000000;
+    --brand: #ff6ea3;
+    --brand-ink: #1b1020;
+    --mint: #3ddc9a;
+    --dot: rgba(247, 241, 232, 0.12);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer base {
+  body {
+    background-color: var(--paper);
+    background-image: radial-gradient(
+      circle at 1px 1px,
+      var(--dot) 1px,
+      transparent 0
+    );
+    background-size: 24px 24px;
+  }
+
+  ::selection {
+    background: var(--brand);
+    color: var(--brand-ink);
+  }
+
+  input,
+  textarea,
+  button {
+    font: inherit;
+  }
+
+  :focus-visible {
+    outline: 3px solid var(--brand);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* The whole UI is built from stickers: hard border, hard offset shadow. */
+  .sticker {
+    border: 2px solid var(--edge);
+    box-shadow: 4px 4px 0 var(--edge);
+  }
+
+  .sticker-sm {
+    border: 2px solid var(--edge);
+    box-shadow: 2px 2px 0 var(--edge);
+  }
+
+  .press {
+    transition:
+      transform 0.12s ease,
+      box-shadow 0.12s ease;
+  }
+
+  .press:hover {
+    transform: translate(-1px, -1px);
+    box-shadow: 6px 6px 0 var(--edge);
+  }
+
+  .press:active {
+    transform: translate(2px, 2px);
+    box-shadow: 1px 1px 0 var(--edge);
+  }
+
+  .press-sm:hover {
+    transform: translate(-1px, -1px);
+    box-shadow: 3px 3px 0 var(--edge);
+  }
+
+  .press-sm:active {
+    transform: translate(1px, 1px);
+    box-shadow: 1px 1px 0 var(--edge);
+  }
+
+  .field {
+    background: var(--panel);
+    border: 2px solid var(--edge);
+    border-radius: 0.75rem;
+    padding: 0.6rem 0.9rem;
+    color: var(--ink);
+    width: 100%;
+  }
+
+  .field::placeholder {
+    color: var(--muted);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    transform: scale(0.82);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    transform: translateY(1rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.pop-in {
+  animation: pop-in 0.18s ease-out;
+}
+
+.toast-in {
+  animation: toast-in 0.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .press:hover,
+  .press:active,
+  .press-sm:hover,
+  .press-sm:active {
+    transform: none;
+  }
 }
