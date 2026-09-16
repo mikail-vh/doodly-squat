@@ -50,9 +50,9 @@ export async function GET(request: NextRequest, { params }: Context) {
   );
   if (!profile) return fail("exchange");
 
-  const user = linkOrCreateUser(provider, profile);
-  const needsTotp = requiresTwoFactor(user.id);
-  const token = createSession(user.id, needsTotp);
+  const user = await linkOrCreateUser(provider, profile);
+  const needsTotp = await requiresTwoFactor(user.id);
+  const token = await createSession(user.id, needsTotp);
 
   const destination = needsTotp
     ? `/signin/two-factor?next=${encodeURIComponent(next)}`

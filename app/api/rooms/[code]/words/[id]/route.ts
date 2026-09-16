@@ -9,8 +9,8 @@ export async function DELETE(_request: Request, { params }: Context) {
   if (!Number.isInteger(wordId)) {
     return NextResponse.json({ error: "Bad word id" }, { status: 400 });
   }
-  if (!deleteWord(code, wordId)) {
+  if (!(await deleteWord(code, wordId))) {
     return NextResponse.json({ error: "Word not found" }, { status: 404 });
   }
-  return NextResponse.json({ words: listWords(code) });
+  return NextResponse.json({ words: await listWords(code) });
 }

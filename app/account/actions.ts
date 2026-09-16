@@ -21,7 +21,7 @@ export async function signOutAction() {
 export async function renameAction(formData: FormData) {
   const user = await currentUser();
   if (!user) redirect("/signin");
-  updateDisplayName(user.id, String(formData.get("displayName") ?? ""));
+  await updateDisplayName(user.id, String(formData.get("displayName") ?? ""));
   revalidatePath("/account");
 }
 
@@ -34,7 +34,7 @@ export async function confirmTwoFactorAction(
   const user = await currentUser();
   if (!user) return { error: "You are not signed in any more." };
 
-  const codes = confirmTotpEnrollment(
+  const codes = await confirmTotpEnrollment(
     user.id,
     String(formData.get("code") ?? "").trim(),
   );
@@ -61,11 +61,11 @@ export async function disableTwoFactorAction(
   // so it costs a current code.
   const entry = String(formData.get("code") ?? "").trim();
   const accepted = entry.includes("-")
-    ? consumeRecoveryCode(user.id, entry)
-    : consumeTotp(user.id, entry);
+    ? await consumeRecoveryCode(user.id, entry)
+    : await consumeTotp(user.id, entry);
 
   if (!accepted) return { error: "Enter a current code to turn two-factor off." };
 
-  disableTwoFactor(user.id);
+  await disableTwoFactor(user.id);
   redirect("/account");
 }

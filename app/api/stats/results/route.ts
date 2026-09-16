@@ -35,7 +35,7 @@ export async function POST(request: Request) {
   }
 
   const playedAt = Number.isFinite(body?.playedAt) ? Number(body.playedAt) : Date.now();
-  const recorded = recordResults(matchId, playedAt, players);
+  const recorded = await recordResults(matchId, playedAt, players);
 
   return NextResponse.json({ matchId, recorded }, { status: 201 });
 }

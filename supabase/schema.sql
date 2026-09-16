@@ -25,9 +25,13 @@ create table if not exists users (
   password_hash text,
   avatar_url    text,
   is_admin      boolean     not null default false,
-  created_at    timestamptz not null default now(),
-  -- An account has to be reachable somehow.
-  constraint users_has_a_login check (username is not null or email is not null)
+  created_at    timestamptz not null default now()
+  -- NOTE: a `check (username is not null or email is not null)` constraint
+  -- belongs here, but only once username/password accounts exist. Until then
+  -- the sole login route is OAuth, and lib/oauth.ts deliberately stores a null
+  -- email whenever the provider reports the address unverified -- so the
+  -- constraint would reject a sign-in that works fine today. Reinstate it in
+  -- the same change that adds passwords.
 );
 
 create table if not exists oauth_accounts (

@@ -11,9 +11,9 @@ export const dynamic = "force-dynamic";
 export default async function TwoFactorSetupPage() {
   const user = await currentUser();
   if (!user) redirect("/signin?next=%2Faccount%2Ftwo-factor");
-  if (twoFactorEnabled(user.id)) redirect("/account");
+  if (await twoFactorEnabled(user.id)) redirect("/account");
 
-  const secret = beginTotpEnrollment(user.id);
+  const secret = await beginTotpEnrollment(user.id);
   const issuer = process.env.APP_NAME?.trim() || "Doodly Squat";
   const uri = otpauthUri(secret, user.email ?? user.displayName, issuer);
   const qr = await QRCode.toDataURL(uri, { margin: 1, width: 220 });

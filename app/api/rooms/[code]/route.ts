@@ -7,21 +7,21 @@ type Context = { params: Promise<{ code: string }> };
 
 export async function GET(_request: Request, { params }: Context) {
   const { code } = await params;
-  const room = getRoom(code);
+  const [room, words] = await Promise.all([getRoom(code), listWords(code)]);
   if (!room) {
     return NextResponse.json({ error: "Room not found" }, { status: 404 });
   }
-  return NextResponse.json({ room, words: listWords(code) });
+  return NextResponse.json({ room, words });
 }
 
 export async function PATCH(request: Request, { params }: Context) {
   const { code } = await params;
-  if (!getRoom(code)) {
+  if (!(await getRoom(code))) {
     return NextResponse.json({ error: "Room not found" }, { status: 404 });
   }
   const body = await request.json().catch(() => ({}));
   if (typeof body.name !== "string") {
     return NextResponse.json({ error: "A name is required" }, { status: 400 });
   }
-  return NextResponse.json({ room: renameRoom(code, body.name) });
+  return NextResponse.json({ room: await renameRoom(code, body.name) });
 }

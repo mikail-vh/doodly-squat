@@ -32,10 +32,13 @@ export default async function AdminPage() {
   // 404 rather than redirect: no reason to tell anyone this route exists.
   if (!user?.isAdmin) notFound();
 
-  const stats = totals();
-  const people = accounts();
-  const rooms = stashes();
-  const recent = latestWords();
+  // Four independent queries; one wave rather than four round trips.
+  const [stats, people, rooms, recent] = await Promise.all([
+    totals(),
+    accounts(),
+    stashes(),
+    latestWords(),
+  ]);
 
   const tiles: Array<[string, number, string?]> = [
     ["Accounts", stats.users, `+${stats.newUsersThisWeek} this week`],
@@ -203,9 +206,8 @@ export default async function AdminPage() {
       </div>
 
       <p className="mt-8 text-center text-xs text-muted">
-        Need real SQL? The read-only database browser lives at{" "}
-        <span className="font-mono">squat-db.mvhuysie.com</span>, reachable over
-        the tailnet only.
+        Need real SQL? The database lives in Supabase — use the table editor
+        or the SQL editor in the project dashboard.
       </p>
     </main>
   );

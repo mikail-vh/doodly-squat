@@ -25,8 +25,8 @@ export async function verifyTwoFactorAction(
 
   // A recovery code is the hyphenated one; anything else is treated as TOTP.
   const accepted = entry.includes("-")
-    ? consumeRecoveryCode(user.id, entry)
-    : consumeTotp(user.id, entry);
+    ? await consumeRecoveryCode(user.id, entry)
+    : await consumeTotp(user.id, entry);
 
   if (!accepted) {
     return { error: "That code did not work. They change every 30 seconds." };

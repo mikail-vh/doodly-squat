@@ -11,6 +11,11 @@ function makeCode(length = 6) {
   );
 }
 
+/** Postgres raises 23505 for any unique-constraint violation. */
+function isUniqueViolation(error: unknown) {
+  return (error as { code?: string } | null)?.code === "23505";
+}
+
 /**
  * Commas and newlines are separators rather than content, because the whole
  * point of the list is to come back out as one comma-separated string.
@@ -29,69 +34,68 @@ export function parseWords(input: string): string[] {
   return words;
 }
 
-export function createRoom(name: string): Room {
+export async function createRoom(name: string): Promise<Room> {
   const clean = name.replace(/\s+/g, " ").trim().slice(0, 40) || "Our Stash";
-  const createdAt = Date.now();
-  const insert = db().prepare(
-    "INSERT INTO rooms (code, name, created_at) VALUES (?, ?, ?)",
-  );
+  const sql = db();
 
   // Collisions are vanishingly unlikely, but a retry is cheaper than an outage.
   for (let attempt = 0; attempt < 8; attempt++) {
     const code = makeCode();
     try {
-      insert.run(code, clean, createdAt);
-      return { code, name: clean, createdAt };
-    } catch {
-      continue;
+      const [row] = await sql<Array<{ created_at: number }>>`
+        INSERT INTO rooms (code, name) VALUES (${code}, ${clean})
+        RETURNING created_at
+      `;
+      return { code, name: clean, createdAt: row.created_at };
+    } catch (error) {
+      if (isUniqueViolation(error)) continue;
+      throw error;
     }
   }
   throw new Error("Could not allocate a room code");
 }
 
-export function getRoom(code: string): Room | null {
-  const row = db()
-    .prepare("SELECT code, name, created_at FROM rooms WHERE code = ?")
-    .get(code.toUpperCase()) as
-    | { code: string; name: string; created_at: number }
-    | undefined;
+export async function getRoom(code: string): Promise<Room | null> {
+  const [row] = await db()<Array<{ code: string; name: string; created_at: number }>>`
+    SELECT code, name, created_at FROM rooms WHERE code = ${code.toUpperCase()}
+  `;
   return row
     ? { code: row.code, name: row.name, createdAt: row.created_at }
     : null;
 }
 
-export function renameRoom(code: string, name: string): Room | null {
+export async function renameRoom(
+  code: string,
+  name: string,
+): Promise<Room | null> {
   const clean = name.replace(/\s+/g, " ").trim().slice(0, 40);
   if (!clean) return getRoom(code);
-  db()
-    .prepare("UPDATE rooms SET name = ? WHERE code = ?")
-    .run(clean, code.toUpperCase());
+  await db()`UPDATE rooms SET name = ${clean} WHERE code = ${code.toUpperCase()}`;
   return getRoom(code);
 }
 
-export function listWords(code: string): Word[] {
-  const rows = db()
-    .prepare(
-      `SELECT w.id, w.text, w.added_by, w.created_at, w.user_id,
-              u.display_name, u.avatar_url
-         FROM words w
-         LEFT JOIN users u ON u.id = w.user_id
-        WHERE w.room_code = ?
-        ORDER BY w.id DESC`,
-    )
-    .all(code.toUpperCase()) as Array<{
-    id: number;
-    text: string;
-    added_by: string;
-    created_at: number;
-    user_id: string | null;
-    display_name: string | null;
-    avatar_url: string | null;
-  }>;
+export async function listWords(code: string): Promise<Word[]> {
+  const rows = await db()<
+    Array<{
+      id: number;
+      text: string;
+      added_by: string;
+      created_at: number;
+      user_id: string | null;
+      display_name: string | null;
+      avatar_url: string | null;
+    }>
+  >`
+    SELECT w.id, w.text, w.added_by, w.created_at, w.user_id,
+           u.display_name, u.avatar_url
+      FROM words w
+      LEFT JOIN users u ON u.id = w.user_id
+     WHERE w.room_code = ${code.toUpperCase()}
+     ORDER BY w.id DESC
+  `;
 
-  // Rows arrive with a null prototype; rebuild them as plain objects so they
-  // serialize cleanly across the server/client boundary. An account's current
-  // display name wins over whatever nickname was typed at the time.
+  // An account's current display name wins over whatever nickname was typed
+  // at the time.
   return rows.map((row) => ({
     id: row.id,
     text: row.text,
@@ -103,38 +107,46 @@ export function listWords(code: string): Word[] {
 }
 
 /** Returns how many words were new — duplicates are silently skipped. */
-export function addWords(
+export async function addWords(
   code: string,
   input: string,
   addedBy: string,
   userId: string | null = null,
-): number {
+): Promise<number> {
   const room = code.toUpperCase();
   const author = addedBy.replace(/\s+/g, " ").trim().slice(0, 24) || "someone";
-  const insert = db().prepare(
-    `INSERT OR IGNORE INTO words (room_code, text, added_by, user_id, created_at)
-     VALUES (?, ?, ?, ?, ?)`,
-  );
-  let added = 0;
-  const now = Date.now();
-  for (const text of parseWords(input)) {
-    const result = insert.run(room, text, author, userId, now);
-    if (result.changes > 0) added++;
-  }
-  return added;
+  const words = parseWords(input);
+  if (words.length === 0) return 0;
+
+  const sql = db();
+  const rows = words.map((text) => ({
+    room_code: room,
+    text,
+    added_by: author,
+    user_id: userId,
+  }));
+
+  // One statement rather than one per word: over a Frankfurt round trip, a
+  // pasted list of fifty would otherwise cost fifty times ~150 ms.
+  // parseWords has already removed case-insensitive duplicates within the
+  // batch, so the only conflicts left are against words already stored.
+  const result = await sql`
+    INSERT INTO words ${sql(rows, "room_code", "text", "added_by", "user_id")}
+    ON CONFLICT DO NOTHING
+  `;
+  return result.count;
 }
 
-export function deleteWord(code: string, id: number): boolean {
-  const result = db()
-    .prepare("DELETE FROM words WHERE room_code = ? AND id = ?")
-    .run(code.toUpperCase(), id);
-  return result.changes > 0;
+export async function deleteWord(code: string, id: number): Promise<boolean> {
+  const result = await db()`
+    DELETE FROM words WHERE room_code = ${code.toUpperCase()} AND id = ${id}
+  `;
+  return result.count > 0;
 }
 
-export function clearWords(code: string): number {
-  return Number(
-    db()
-      .prepare("DELETE FROM words WHERE room_code = ?")
-      .run(code.toUpperCase()).changes,
-  );
+export async function clearWords(code: string): Promise<number> {
+  const result = await db()`
+    DELETE FROM words WHERE room_code = ${code.toUpperCase()}
+  `;
+  return result.count;
 }

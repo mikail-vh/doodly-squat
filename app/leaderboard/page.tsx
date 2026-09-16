@@ -11,8 +11,7 @@ export const dynamic = "force-dynamic";
 const MEDALS = ["🥇", "🥈", "🥉"];
 
 export default async function LeaderboardPage() {
-  const rows = leaderboard();
-  const me = await currentUser();
+  const [rows, me] = await Promise.all([leaderboard(), currentUser()]);
   const anyGames = rows.some((row) => row.games > 0);
 
   return (

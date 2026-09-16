@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
-/** Used by the Docker healthcheck: proves the process is up and the DB opens. */
+/**
+ * Proves the process is up and Postgres answers. The keep-alive Action pings
+ * this twice a week, which is what stops a free Supabase project pausing.
+ */
 export async function GET() {
   try {
-    db().prepare("SELECT 1").get();
+    await db()`SELECT 1`;
     return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json({ ok: false }, { status: 503 });

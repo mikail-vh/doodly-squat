@@ -25,7 +25,7 @@ type UserRow = {
   display_name: string;
   email: string | null;
   avatar_url: string | null;
-  is_admin: number;
+  is_admin: boolean;
   created_at: number;
 };
 
@@ -35,7 +35,7 @@ function toUser(row: UserRow): AccountUser {
     displayName: row.display_name,
     email: row.email,
     avatarUrl: row.avatar_url,
-    isAdmin: row.is_admin === 1,
+    isAdmin: row.is_admin,
     createdAt: row.created_at,
   };
 }
@@ -64,12 +64,11 @@ export function transientCookieOptions() {
   return { ...sessionCookieOptions(600), maxAge: 600 };
 }
 
-export function getUser(id: string): AccountUser | null {
-  const row = db()
-    .prepare(
-      "SELECT id, display_name, email, avatar_url, is_admin, created_at FROM users WHERE id = ?",
-    )
-    .get(id) as UserRow | undefined;
+export async function getUser(id: string): Promise<AccountUser | null> {
+  const [row] = await db()<UserRow[]>`
+    SELECT id, display_name, email, avatar_url, is_admin, created_at
+      FROM users WHERE id = ${id}
+  `;
   return row ? toUser(row) : null;
 }
 
@@ -78,78 +77,75 @@ export function getUser(id: string): AccountUser | null {
  * existing account when both sides report the same *verified* email. Linking
  * on an unverified address would let anyone claim someone else's account.
  */
-export function linkOrCreateUser(
+export async function linkOrCreateUser(
   provider: Provider,
   profile: OAuthProfile,
-): AccountUser {
-  const database = db();
-  const now = Date.now();
+): Promise<AccountUser> {
+  const sql = db();
 
-  const existingLink = database
-    .prepare(
-      "SELECT user_id FROM oauth_accounts WHERE provider = ? AND provider_id = ?",
-    )
-    .get(provider.id, profile.providerId) as { user_id: string } | undefined;
+  const [existingLink] = await sql<Array<{ user_id: string }>>`
+    SELECT user_id FROM oauth_accounts
+     WHERE provider = ${provider.id} AND provider_id = ${profile.providerId}
+  `;
 
   if (existingLink) {
     // Keep the name and avatar fresh on every sign-in.
-    database
-      .prepare("UPDATE users SET display_name = ?, avatar_url = ? WHERE id = ?")
-      .run(profile.displayName, profile.avatarUrl, existingLink.user_id);
-    return getUser(existingLink.user_id)!;
+    await sql`
+      UPDATE users
+         SET display_name = ${profile.displayName}, avatar_url = ${profile.avatarUrl}
+       WHERE id = ${existingLink.user_id}
+    `;
+    return (await getUser(existingLink.user_id))!;
   }
 
-  let userId: string | null = null;
+  // Finding the account and linking the provider to it has to be atomic, or
+  // two simultaneous first sign-ins could both see an empty users table and
+  // both claim ownership.
+  const userId = await sql.begin(async (tx) => {
+    let id: string | null = null;
 
-  if (profile.email) {
-    const byEmail = database
-      .prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE")
-      .get(profile.email) as { id: string } | undefined;
-    if (byEmail) userId = byEmail.id;
-  }
+    if (profile.email) {
+      // email is citext, so this matches case-insensitively without COLLATE.
+      const [byEmail] = await tx<Array<{ id: string }>>`
+        SELECT id FROM users WHERE email = ${profile.email}
+      `;
+      if (byEmail) id = byEmail.id;
+    }
 
-  if (!userId) {
-    userId = crypto.randomUUID();
-    // The very first account to sign in owns the instance.
-    const { count } = database.prepare("SELECT COUNT(*) AS count FROM users").get() as {
-      count: number;
-    };
-    database
-      .prepare(
-        `INSERT INTO users (id, display_name, email, avatar_url, is_admin, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        userId,
-        profile.displayName,
-        profile.email,
-        profile.avatarUrl,
-        count === 0 ? 1 : 0,
-        now,
-      );
-  }
+    if (!id) {
+      id = crypto.randomUUID();
+      // The very first account to sign in owns the instance.
+      const [{ count }] = await tx<Array<{ count: number }>>`
+        SELECT COUNT(*) AS count FROM users
+      `;
+      await tx`
+        INSERT INTO users (id, display_name, email, avatar_url, is_admin)
+        VALUES (${id}, ${profile.displayName}, ${profile.email},
+                ${profile.avatarUrl}, ${count === 0})
+      `;
+    }
 
-  database
-    .prepare(
-      `INSERT INTO oauth_accounts (provider, provider_id, user_id, created_at)
-       VALUES (?, ?, ?, ?)`,
-    )
-    .run(provider.id, profile.providerId, userId, now);
+    await tx`
+      INSERT INTO oauth_accounts (provider, provider_id, user_id)
+      VALUES (${provider.id}, ${profile.providerId}, ${id})
+    `;
+    return id;
+  });
 
-  return getUser(userId)!;
+  return (await getUser(userId as string))!;
 }
 
-export function listLinkedProviders(userId: string): string[] {
-  const rows = db()
-    .prepare("SELECT provider FROM oauth_accounts WHERE user_id = ? ORDER BY created_at")
-    .all(userId) as Array<{ provider: string }>;
+export async function listLinkedProviders(userId: string): Promise<string[]> {
+  const rows = await db()<Array<{ provider: string }>>`
+    SELECT provider FROM oauth_accounts WHERE user_id = ${userId} ORDER BY created_at
+  `;
   return rows.map((row) => row.provider);
 }
 
-export function updateDisplayName(userId: string, name: string) {
+export async function updateDisplayName(userId: string, name: string) {
   const clean = name.replace(/\s+/g, " ").trim().slice(0, 32);
   if (!clean) return;
-  db().prepare("UPDATE users SET display_name = ? WHERE id = ?").run(clean, userId);
+  await db()`UPDATE users SET display_name = ${clean} WHERE id = ${userId}`;
 }
 
 /* ---------------------------------------------------------------- sessions */
@@ -160,45 +156,41 @@ function hashToken(token: string) {
 
 /**
  * Returns the raw token for the cookie; only its hash is stored, so a leaked
- * database file cannot be replayed as a live session.
+ * database dump cannot be replayed as a live session.
  */
-export function createSession(userId: string, needsTotp: boolean): string {
+export async function createSession(
+  userId: string,
+  needsTotp: boolean,
+): Promise<string> {
   const token = crypto.randomBytes(32).toString("base64url");
-  const now = Date.now();
-  db()
-    .prepare(
-      `INSERT INTO sessions (id, user_id, needs_totp, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    )
-    .run(
-      hashToken(token),
-      userId,
-      needsTotp ? 1 : 0,
-      now,
-      now + SESSION_DAYS * 86400 * 1000,
-    );
+  await db()`
+    INSERT INTO sessions (id, user_id, needs_totp, expires_at)
+    VALUES (${hashToken(token)}, ${userId}, ${needsTotp},
+            now() + ${SESSION_DAYS} * interval '1 day')
+  `;
   return token;
 }
 
 type ResolvedSession = { id: string; user: AccountUser; needsTotp: boolean };
 
-function resolveToken(token: string): ResolvedSession | null {
+async function resolveToken(token: string): Promise<ResolvedSession | null> {
+  const sql = db();
   const id = hashToken(token);
-  const row = db()
-    .prepare("SELECT user_id, needs_totp, expires_at FROM sessions WHERE id = ?")
-    .get(id) as
-    | { user_id: string; needs_totp: number; expires_at: number }
-    | undefined;
+  const [row] = await sql<
+    Array<{ user_id: string; needs_totp: boolean; expires_at: number }>
+  >`
+    SELECT user_id, needs_totp, expires_at FROM sessions WHERE id = ${id}
+  `;
 
   if (!row) return null;
   if (row.expires_at < Date.now()) {
-    db().prepare("DELETE FROM sessions WHERE id = ?").run(id);
+    await sql`DELETE FROM sessions WHERE id = ${id}`;
     return null;
   }
 
-  const user = getUser(row.user_id);
+  const user = await getUser(row.user_id);
   if (!user) return null;
-  return { id, user, needsTotp: row.needs_totp === 1 };
+  return { id, user, needsTotp: row.needs_totp };
 }
 
 async function readSession(): Promise<ResolvedSession | null> {
@@ -221,14 +213,14 @@ export async function pendingTwoFactorUser(): Promise<AccountUser | null> {
 export async function completeTwoFactor() {
   const session = await readSession();
   if (!session) return;
-  db().prepare("UPDATE sessions SET needs_totp = 0 WHERE id = ?").run(session.id);
+  await db()`UPDATE sessions SET needs_totp = false WHERE id = ${session.id}`;
 }
 
 export async function signOut() {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (token) {
-    db().prepare("DELETE FROM sessions WHERE id = ?").run(hashToken(token));
+    await db()`DELETE FROM sessions WHERE id = ${hashToken(token)}`;
   }
   store.delete(SESSION_COOKIE);
 }
@@ -237,9 +229,9 @@ export async function signOut() {
 export async function revokeOtherSessions() {
   const session = await readSession();
   if (!session) return;
-  db()
-    .prepare("DELETE FROM sessions WHERE user_id = ? AND id != ?")
-    .run(session.user.id, session.id);
+  await db()`
+    DELETE FROM sessions WHERE user_id = ${session.user.id} AND id != ${session.id}
+  `;
 }
 
 /* ------------------------------------------------------------ two-factor */
@@ -250,16 +242,16 @@ type TotpRow = {
   last_step: number | null;
 };
 
-function totpRow(userId: string): TotpRow | undefined {
-  return db()
-    .prepare(
-      "SELECT secret, confirmed_at, last_step FROM totp_credentials WHERE user_id = ?",
-    )
-    .get(userId) as TotpRow | undefined;
+async function totpRow(userId: string): Promise<TotpRow | undefined> {
+  const [row] = await db()<TotpRow[]>`
+    SELECT secret, confirmed_at, last_step
+      FROM totp_credentials WHERE user_id = ${userId}
+  `;
+  return row;
 }
 
-export function twoFactorEnabled(userId: string): boolean {
-  return totpRow(userId)?.confirmed_at != null;
+export async function twoFactorEnabled(userId: string): Promise<boolean> {
+  return (await totpRow(userId))?.confirmed_at != null;
 }
 
 /**
@@ -268,18 +260,17 @@ export function twoFactorEnabled(userId: string): boolean {
  * invalidate a code the user has already scanned; starting over means turning
  * two-factor off first, which deletes the row.
  */
-export function beginTotpEnrollment(userId: string): string {
-  const row = totpRow(userId);
+export async function beginTotpEnrollment(userId: string): Promise<string> {
+  const row = await totpRow(userId);
   if (row) return row.secret;
 
   const secret = generateSecret();
-  db()
-    .prepare(
-      `INSERT INTO totp_credentials (user_id, secret, confirmed_at, last_step, created_at)
-       VALUES (?, ?, NULL, NULL, ?)
-       ON CONFLICT(user_id) DO UPDATE SET secret = excluded.secret, created_at = excluded.created_at`,
-    )
-    .run(userId, secret, Date.now());
+  await db()`
+    INSERT INTO totp_credentials (user_id, secret, confirmed_at, last_step)
+    VALUES (${userId}, ${secret}, NULL, NULL)
+    ON CONFLICT (user_id) DO UPDATE
+      SET secret = excluded.secret, created_at = now()
+  `;
   return secret;
 }
 
@@ -287,29 +278,33 @@ export function beginTotpEnrollment(userId: string): string {
  * Accepts a code for an unconfirmed secret, turns 2FA on, and returns the
  * one-time recovery codes. They are shown once and stored only as hashes.
  */
-export function confirmTotpEnrollment(
+export async function confirmTotpEnrollment(
   userId: string,
   code: string,
-): string[] | null {
-  const row = totpRow(userId);
+): Promise<string[] | null> {
+  const row = await totpRow(userId);
   if (!row || row.confirmed_at != null) return null;
 
   const step = verifyTotp(row.secret, code);
   if (step === null) return null;
 
-  const database = db();
-  database
-    .prepare(
-      "UPDATE totp_credentials SET confirmed_at = ?, last_step = ? WHERE user_id = ?",
-    )
-    .run(Date.now(), step, userId);
-
   const codes = generateRecoveryCodes();
-  database.prepare("DELETE FROM recovery_codes WHERE user_id = ?").run(userId);
-  const insert = database.prepare(
-    "INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)",
-  );
-  for (const recovery of codes) insert.run(userId, hashRecoveryCode(recovery));
+  const hashed = codes.map((recovery) => ({
+    user_id: userId,
+    code_hash: hashRecoveryCode(recovery),
+  }));
+
+  // Enabling 2FA and issuing the recovery codes must succeed or fail together,
+  // otherwise a failure here leaves the account with no backup route in.
+  await db().begin(async (tx) => {
+    await tx`
+      UPDATE totp_credentials
+         SET confirmed_at = now(), last_step = ${step}
+       WHERE user_id = ${userId}
+    `;
+    await tx`DELETE FROM recovery_codes WHERE user_id = ${userId}`;
+    await tx`INSERT INTO recovery_codes ${tx(hashed, "user_id", "code_hash")}`;
+  });
 
   return codes;
 }
@@ -318,47 +313,58 @@ export function confirmTotpEnrollment(
  * Verifies a code at the sign-in prompt. Each step is remembered so the same
  * six digits cannot be replayed inside their 30-second window.
  */
-export function consumeTotp(userId: string, code: string): boolean {
-  const row = totpRow(userId);
+export async function consumeTotp(
+  userId: string,
+  code: string,
+): Promise<boolean> {
+  const row = await totpRow(userId);
   if (!row || row.confirmed_at == null) return false;
 
   const step = verifyTotp(row.secret, code);
   if (step === null) return false;
   if (row.last_step != null && step <= row.last_step) return false;
 
-  db()
-    .prepare("UPDATE totp_credentials SET last_step = ? WHERE user_id = ?")
-    .run(step, userId);
-  return true;
+  // The replay guard is repeated in SQL: two submissions of the same code can
+  // both clear the check above, and only one of them may win the update.
+  const result = await db()`
+    UPDATE totp_credentials
+       SET last_step = ${step}
+     WHERE user_id = ${userId}
+       AND (last_step IS NULL OR last_step < ${step})
+  `;
+  return result.count > 0;
 }
 
-export function consumeRecoveryCode(userId: string, code: string): boolean {
-  const hash = hashRecoveryCode(code);
-  const result = db()
-    .prepare(
-      "UPDATE recovery_codes SET used_at = ? WHERE user_id = ? AND code_hash = ? AND used_at IS NULL",
-    )
-    .run(Date.now(), userId, hash);
-  return result.changes > 0;
+export async function consumeRecoveryCode(
+  userId: string,
+  code: string,
+): Promise<boolean> {
+  const result = await db()`
+    UPDATE recovery_codes SET used_at = now()
+     WHERE user_id = ${userId}
+       AND code_hash = ${hashRecoveryCode(code)}
+       AND used_at IS NULL
+  `;
+  return result.count > 0;
 }
 
-export function countRecoveryCodes(userId: string): number {
-  const { count } = db()
-    .prepare(
-      "SELECT COUNT(*) AS count FROM recovery_codes WHERE user_id = ? AND used_at IS NULL",
-    )
-    .get(userId) as { count: number };
+export async function countRecoveryCodes(userId: string): Promise<number> {
+  const [{ count }] = await db()<Array<{ count: number }>>`
+    SELECT COUNT(*) AS count FROM recovery_codes
+     WHERE user_id = ${userId} AND used_at IS NULL
+  `;
   return count;
 }
 
-export function disableTwoFactor(userId: string) {
-  const database = db();
-  database.prepare("DELETE FROM totp_credentials WHERE user_id = ?").run(userId);
-  database.prepare("DELETE FROM recovery_codes WHERE user_id = ?").run(userId);
+export async function disableTwoFactor(userId: string) {
+  await db().begin(async (tx) => {
+    await tx`DELETE FROM totp_credentials WHERE user_id = ${userId}`;
+    await tx`DELETE FROM recovery_codes WHERE user_id = ${userId}`;
+  });
 }
 
 /** Exposed for the sign-in callback, which must gate the session before issuing it. */
-export function requiresTwoFactor(userId: string): boolean {
+export async function requiresTwoFactor(userId: string): Promise<boolean> {
   return twoFactorEnabled(userId);
 }
 

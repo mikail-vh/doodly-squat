@@ -26,11 +26,15 @@ export default async function AccountPage() {
   const user = await currentUser();
   if (!user) redirect("/signin?next=%2Faccount");
 
-  const totals = totalsFor(user.id);
-  const games = recentGames(user.id);
-  const providers = listLinkedProviders(user.id);
-  const twoFactor = twoFactorEnabled(user.id);
-  const recoveryLeft = twoFactor ? countRecoveryCodes(user.id) : 0;
+  // Independent queries, so they go together: serialised, these would be four
+  // separate round trips to Frankfurt before the page could render.
+  const [totals, games, providers, twoFactor] = await Promise.all([
+    totalsFor(user.id),
+    recentGames(user.id),
+    listLinkedProviders(user.id),
+    twoFactorEnabled(user.id),
+  ]);
+  const recoveryLeft = twoFactor ? await countRecoveryCodes(user.id) : 0;
   const progress = levelFor(totals?.xp ?? 0);
 
   return (
