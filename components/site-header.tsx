@@ -22,6 +22,15 @@ export default async function SiteHeader() {
             Leaderboard
           </Link>
 
+          {user?.isAdmin ? (
+            <Link
+              href="/admin"
+              className="sticker-sm press-sm rounded-lg bg-paper px-3 py-1.5 font-display"
+            >
+              Admin
+            </Link>
+          ) : null}
+
           {user ? (
             <Link
               href="/account"

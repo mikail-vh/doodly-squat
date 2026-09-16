@@ -222,6 +222,23 @@ docker logs caddy --tail 20 | grep -i "certificate obtained"
 `100.64.0.0/10` is Tailscale's range, so `status.` and `stats.` now answer only
 over the tailnet and return 403 to everyone else.
 
+### Reaching the dashboards afterwards — read this
+
+`status.mvhuysie.com` resolves to the **public** IP, so browsing to that
+hostname sends your traffic over the public internet and Caddy sees your public
+address, not a tailnet one. It will 403 **you** as well.
+
+Use the tailnet directly instead — both services already listen there:
+
+| Dashboard | URL |
+| --- | --- |
+| uptime-kuma | `http://100.117.93.19:3001` |
+| beszel | `http://100.117.93.19:8090` |
+
+No TLS, but the traffic is already inside WireGuard. Bookmark those. The public
+hostnames staying up as 403s is harmless — Caddy keeps their certificates
+renewed over port 80 in case you ever want them back.
+
 ---
 
 ## Step 6 — OCI firewall  `[BROWSER]`
@@ -271,6 +288,9 @@ SSH now happens only over Tailscale; the dashboards are guarded by Caddy.
 
 ## Step 7 — Verify  `[LOCAL]`
 
+**Run these from your own machine, not over SSH.** On the VPS they travel via
+localhost and pass even when the firewall is shut, which proves nothing.
+
 ```bash
 curl -s  https://squat.mvhuysie.com/api/health        # {"ok":true}
 curl -sI https://squat.mvhuysie.com/ | head -1        # HTTP/2 200
@@ -317,6 +337,13 @@ ssh ubuntu@100.117.93.19 'docker logs -f doodly-squat'
 
 # back up — the whole database is one file
 ssh ubuntu@100.117.93.19 'docker cp doodly-squat:/data/stash.db -' > "squat-$(date +%F).tar"
+```
+
+That last line is bash. In **PowerShell**, `$(date +%F)` is parsed as the
+`Get-Date` cmdlet and fails — use:
+
+```powershell
+ssh ubuntu@100.117.93.19 'docker cp doodly-squat:/data/stash.db -' > "squat-$(Get-Date -Format yyyy-MM-dd).tar"
 ```
 
 Migrations run automatically when the app opens the database, so an update
